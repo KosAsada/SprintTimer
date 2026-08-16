@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Sprint Timer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=JetBrains+Mono:wght@700&display=swap');
+        
+        html, body { height: 100%; overflow: hidden; touch-action: manipulation; position: fixed; width: 100%; margin: 0; }
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        
+        .timer-font { font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; letter-spacing: -0.05em; }
+        
+        /* 100dvhを使用してiOSのアドレスバーを考慮したピッタリの高さにする */
+        .screen { display: none; width: 100%; height: 100dvh; position: absolute; top: 0; left: 0; flex-direction: column; }
+        @supports not (height: 100dvh) { .screen { height: 100%; } }
+        .screen.active { display: flex; }
+        
+        * { user-select: none; -webkit-user-select: none; }
+
+        @keyframes pulse-red {
+            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+            70% { box-shadow: 0 0 0 30px rgba(239, 68, 68, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        .stop-button-area { animation: pulse-red 2s infinite; cursor: pointer; transition: background-color 0.1s; }
+        .stop-button-area:active { background-color: #7f1d1d; }
+    </style>
+</head>
+<body>
+    <!-- [画面1] 初期セットアップ画面 -->
+    <div id="screen-setup" class="screen active justify-center items-center p-6 text-center">
+        <h1 class="text-4xl font-black mb-2 text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500">Sprint Timer</h1>
+        <p class="text-slate-400 mb-10 text-sm">Real-time synchronized athletics timer</p>
+        
+        <div class="space-y-4 w-full max-w-sm">
+            <button onclick="selectDevice('A')" class="w-full py-4 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold text-xl shadow-lg transition-transform transform active:scale-95">
+                Start / PC<br><span class="text-sm font-normal text-blue-200">Set up as Device A</span>
+            </button>
+            <button onclick="selectDevice('B')" class="w-full py-4 bg-emerald-600 hover:bg-emerald-500 rounded-xl font-bold text-xl shadow-lg transition-transform transform active:scale-95">
+                Goal / Mobile<br><span class="text-sm font-normal text-emerald-200">Set up as Device B</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- [画面2] ルーム接続画面 (デバイスB用) -->
+    <div id="screen-room" class="screen justify-center items-center p-6 text-center">
+        <h2 class="text-2xl font-bold mb-6">Enter PIN</h2>
+        <p class="text-slate-400 mb-6 text-sm">Enter the 4-digit PIN displayed on Device A</p>
+        
+        <div class="flex justify-center gap-3 mb-8">
+            <input type="text" id="pin-1" class="w-14 h-16 text-center text-3xl font-bold bg-slate-800 rounded-lg border-2 border-slate-700 focus:border-emerald-500 focus:outline-none" maxlength="1" inputmode="numeric">
+            <input type="text" id="pin-2" class="w-14 h-16 text-center text-3xl font-bold bg-slate-800 rounded-lg border-2 border-slate-700 focus:border-emerald-500 focus:outline-none" maxlength="1" inputmode="numeric">
+            <input type="text" id="pin-3" class="w-14 h-16 text-center text-3xl font-bold bg-slate-800 rounded-lg border-2 border-slate-700 focus:border-emerald-500 focus:outline-none" maxlength="1" inputmode="numeric">
+            <input type="text" id="pin-4" class="w-14 h-16 text-center text-3xl font-bold bg-slate-800 rounded-lg border-2 border-slate-700 focus:border-emerald-500 focus:outline-none" maxlength="1" inputmode="numeric">
+        </div>
+        
+        <button id="btn-connect" onclick="joinRoom()" class="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 rounded-lg font-bold text-lg shadow-lg">Connect</button>
+        <button onclick="showScreen('setup')" class="mt-4 px-4 py-2 text-slate-400 hover:text-white">Cancel</button>
+    </div>
+
+    <!-- [画面3] デバイスA (スタート地点) - スクロール対応 -->
+    <div id="screen-device-a" class="screen flex-col p-4 md:p-8 overflow-y-auto">
+        <div class="flex justify-between items-start mb-4 shrink-0">
+            <div>
+                <div class="inline-block px-3 py-1 bg-blue-900 text-blue-300 rounded text-xs font-bold mb-2">DEVICE A (START)</div>
+                <div class="text-sm text-slate-400">PIN CODE: <span id="display-pin" class="text-2xl text-white font-mono font-bold tracking-widest ml-2">----</span></div>
+            </div>
+            <div id="a-connection-status" class="flex items-center text-sm font-bold text-yellow-400">
+                <span class="w-3 h-3 rounded-full bg-yellow-500 mr-2"></span>Waiting for connection...
+            </div>
+        </div>
+
+        <div class="flex flex-col lg:flex-row gap-4 md:gap-8 shrink-0 pb-20">
+            <div class="w-full lg:flex-1 bg-slate-800/50 rounded-2xl border border-slate-700 flex flex-col items-center justify-center p-8 relative min-h-[350px]">
+                <div id="a-status-text" class="text-xl font-bold text-slate-400 mb-2 h-8 uppercase tracking-widest">READY</div>
+                <div id="a-timer-display" class="timer-font text-5xl sm:text-7xl md:text-9xl font-black mb-8">00.00</div>
+                <button id="btn-start" onclick="startSequence()" disabled class="w-32 h-32 sm:w-48 sm:h-48 rounded-full bg-gradient-to-b from-blue-500 to-blue-700 hover:from-blue-400 hover:to-blue-600 shadow-[0_0_40px_rgba(59,130,246,0.5)] border-4 border-blue-400 text-white font-black text-2xl sm:text-4xl flex items-center justify-center transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
+                    START
+                </button>
+            </div>
+
+            <div class="w-full shrink-0 lg:w-80 bg-slate-800 rounded-2xl p-6 flex flex-col gap-4">
+                <h3 class="font-bold text-lg border-b border-slate-700 pb-2">Settings</h3>
+                <div>
+                    <label class="block text-sm text-slate-400 mb-2">Interval: Mark → Set (sec)</label>
+                    <input type="number" id="input-mark" value="2.0" step="0.1" min="1.0" max="10.0" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xl font-mono text-center">
+                </div>
+                <div>
+                    <label class="block text-sm text-slate-400 mb-2">Interval: Set → Gun (sec)</label>
+                    <input type="number" id="input-set" value="2.0" step="0.1" min="1.0" max="10.0" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xl font-mono text-center">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- [画面4] デバイスB (ゴール地点) -->
+    <div id="screen-device-b" class="screen">
+        <div class="absolute top-4 left-4 z-10 pointer-events-none">
+            <div class="inline-block px-3 py-1 bg-emerald-900 text-emerald-300 rounded text-xs font-bold">DEVICE B (GOAL)</div>
+        </div>
+        <div class="absolute top-4 right-4 z-10 pointer-events-none">
+            <div id="b-connection-status" class="flex items-center text-sm font-bold text-emerald-400">
+                <span class="w-3 h-3 rounded-full bg-emerald-500 mr-2 shadow-[0_0_10px_#10b981]"></span>Sync OK
+            </div>
+        </div>
+
+        <div id="btn-stop" class="flex-1 flex flex-col items-center justify-center bg-slate-900 stop-button-area relative" onmousedown="stopTimer(event)" ontouchstart="stopTimer(event)">
+            <div id="b-status-text" class="text-[10vw] sm:text-6xl md:text-8xl font-black text-slate-800 mb-4 opacity-50 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight">STOP</div>
+            <div id="b-timer-display" class="timer-font text-[22vw] sm:text-[15vw] md:text-[12rem] font-black text-white pointer-events-none leading-none">00.00</div>
+            <div class="absolute bottom-8 text-slate-500 text-sm pointer-events-none">Tap anywhere on screen to STOP</div>
+        </div>
+
+        <div id="btn-reset-b" class="absolute bottom-8 right-8 hidden z-20">
+            <button onclick="requestReset()" class="w-16 h-16 bg-slate-700 hover:bg-slate-600 rounded-full flex items-center justify-center shadow-lg border-2 border-slate-500 transition-transform active:scale-95">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-white"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- メッセージボックス（モーダル） -->
+    <div id="modal-overlay" class="fixed inset-0 bg-black/80 hidden z-[100] flex items-center justify-center p-4">
+        <div class="bg-slate-800 border border-slate-700 rounded-2xl p-6 max-w-sm w-full shadow-2xl text-center">
+            <h3 class="text-xl font-bold text-red-400 mb-4 flex items-center justify-center">
+                <svg class="w-6 h-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                <span id="modal-title">通信エラー</span>
+            </h3>
+            <p id="modal-message" class="text-slate-300 mb-6 text-sm leading-relaxed text-left"></p>
+            <button id="modal-btn" onclick="closeModal()" class="w-full py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-bold text-white transition-colors">
+                OK
+            </button>
+        </div>
+    </div>
+
+    <script>
+        let peer = null;
+        let conn = null;
+        let currentRole = null;
+        const ROOM_PREFIX = 'sprint-timer-v2-';
+
+        let state = { status: 'ready', finalTime: 0 };
+        let aStartTimestamp = 0; // PC側のマスター時計
+        let bLocalStartTimestamp = 0; // スマホ側の見せかけの時計
+        let connectionEstablished = false; // エラー誤爆防止用フラグ
+
+        let heartbeatInterval = null;
+        let lastHeartbeatReceived = 0;
+
+        // ネットワーク越え(NAT/ファイアウォール)を成功させるためのGoogle STUNサーバー設定
+        const peerConfig = {
+            config: {
+                'iceServers': [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:stun1.l.google.com:19302' },
+                    { urls: 'stun:stun2.l.google.com:19302' }
+                ]
+            }
+        };
+
+        const screens = {
+            setup: document.getElementById('screen-setup'),
+            room: document.getElementById('screen-room'),
+            deviceA: document.getElementById('screen-device-a'),
+            deviceB: document.getElementById('screen-device-b')
+        };
+
+        function showModal(message, title = "通信エラー", btnText = "OK", btnAction = closeModal) {
+            document.getElementById('modal-title').innerText = title;
+            document.getElementById('modal-message').innerHTML = message;
+            
+            const btn = document.getElementById('modal-btn');
+            btn.innerText = btnText;
+            btn.onclick = btnAction;
+            
+            document.getElementById('modal-overlay').classList.remove('hidden');
+        }
+
+        function closeModal() {
+            document.getElementById('modal-overlay').classList.add('hidden');
+        }
+
+        function showScreen(screenId) {
+            Object.values(screens).forEach(el => el.classList.remove('active'));
+            screens[screenId].classList.add('active');
+        }
+
+        function selectDevice(role) {
+            currentRole = role;
+            ensureAudioAwake(); 
+            
+            // 既存の通信接続が残っていれば完全にリセット（競合バグ防止）
+            if (peer) {
+                peer.destroy();
+                peer = null;
+            }
+            if (conn) {
+                conn.close();
+                conn = null;
+            }
+            connectionEstablished = false;
+            stopHeartbeat();
+            
+            if (role === 'A') {
+                showScreen('deviceA');
+                document.getElementById('display-pin').innerText = '...';
+                updateConnectionStatus('connecting', 'Connecting to server...');
+                
+                const roomPin = Math.floor(1000 + Math.random() * 9000).toString();
+                peer = new Peer(ROOM_PREFIX + roomPin, peerConfig); 
+                
+                peer.on('open', () => {
+                    document.getElementById('display-pin').innerText = roomPin;
+                    updateConnectionStatus('waiting', 'Waiting for connection...');
+                });
+
+                peer.on('connection', (connection) => {
+                    conn = connection;
+                    
+                    const initAConnection = () => {
+                        if (connectionEstablished) return;
+                        connectionEstablished = true;
+                        setupNetworkListeners();
+                        
+                        updateConnectionStatus('connected', 'Connected');
+                        document.getElementById('btn-start').disabled = false;
+                        
+                        startHeartbeat();
+                        broadcastState('sync_state', state);
+                    };
+
+                    if (conn.open) {
+                        initAConnection();
+                    } else {
+                        conn.on('open', initAConnection);
+                    }
+                });
+
+                peer.on('error', (err) => {
+                    console.error("Device A Peer Error:", err);
+                    document.getElementById('display-pin').innerText = 'ERR';
+                    updateConnectionStatus('error', 'Server Error');
+                    
+                    let errMsg = "サーバーとの通信に失敗しました。<br><br><span class='text-xs text-slate-400'>エラー詳細: " + err.type + "</span>";
+                    if (err.type === 'unavailable-id') {
+                        errMsg = "このPINは現在システム内で処理中です。<br>画面を再読み込み（リロード）してやり直してください。";
+                    } else if (err.type === 'network' || err.type === 'server-error' || err.type === 'browser-incompatible') {
+                        errMsg = "通信サーバーに接続できません。<br><br>【対処法】<br>・ブラウザを再読み込みしてください<br>・Wi-Fiをオフにしてモバイル回線でお試しください";
+                    }
+                    showModal(errMsg, "サーバーエラー", "再読み込み", () => location.reload());
+                });
+
+                peer.on('disconnected', () => handleDisconnection("Peer disconnected"));
+            } else {
+                showScreen('room');
+                setupPinInputs();
+            }
+        }
+
+        function setupPinInputs() {
+            const inputs = [1,2,3,4].map(i => document.getElementById(`pin-${i}`));
+            inputs.forEach((input, index) => {
+                input.value = '';
+                input.addEventListener('input', (e) => { if(e.target.value.length===1 && index<3) inputs[index+1].focus(); });
+                input.addEventListener('keydown', (e) => { if(e.key==='Backspace' && e.target.value==='' && index>0) inputs[index-1].focus(); });
+            });
+            setTimeout(() => inputs[0].focus(), 100);
+        }
+
+        function joinRoom() {
+            const enteredPin = [1,2,3,4].map(i => document.getElementById(`pin-${i}`).value).join('');
+            if (enteredPin.length === 4) {
+                const btnConnect = document.getElementById('btn-connect');
+                btnConnect.innerText = "Connecting...";
+                btnConnect.disabled = true;
+                ensureAudioAwake(); 
+                
+                peer = new Peer(peerConfig);
+                
+                peer.on('open', () => {
+                    conn = peer.connect(ROOM_PREFIX + enteredPin);
+                    
+                    conn.on('open', () => {
+                        connectionEstablished = true;
+                        showScreen('deviceB');
+                        updateConnectionStatus('connected', 'Sync OK');
+                        setupNetworkListeners();
+                        startHeartbeat();
+                    });
+                    
+                    conn.on('error', (err) => {
+                        console.error("Connection Error:", err);
+                        if (!connectionEstablished) {
+                            let msg = "接続に失敗しました。<br><br><span class='text-xs text-slate-400'>エラー詳細: " + err + "</span>";
+                            if (err.toString().includes('Negotiation of connection')) {
+                                msg = "<b class='text-white'>ネットワークの相性問題によりブロックされました。</b><br><br>iPhoneをご利用の場合、以下のいずれかをお試しください：<br><br><span class='text-emerald-400'>1. スマホの Wi-Fi をオフにして、モバイルデータ通信(4G/5G)で再接続する</span><br><br><span class='text-emerald-400'>2. 設定アプリ ＞ Safari ＞ 「IPアドレスを非公開」をオフにする</span><br><br><span class='text-xs text-slate-500'>エラー詳細: " + err + "</span>";
+                            }
+                            showModal(msg);
+                            const btnConnect = document.getElementById('btn-connect');
+                            btnConnect.innerText = "Connect";
+                            btnConnect.disabled = false;
+                        } else {
+                            handleDisconnection(err);
+                        }
+                    });
+                });
+
+                peer.on('error', (err) => {
+                    console.error("Peer Error:", err);
+                    if (!connectionEstablished) {
+                        let errMsg = "通信エラー (" + err.type + ")";
+                        if (err.type === 'peer-unavailable') {
+                            errMsg = "指定されたPINのデバイスが見つかりません。<br>PC画面のPINをもう一度確認してください。";
+                        }
+                        showModal(errMsg);
+                        const btnConnect = document.getElementById('btn-connect');
+                        btnConnect.innerText = "Connect";
+                        btnConnect.disabled = false;
+                    } else {
+                        handleDisconnection(err.type);
+                    }
+                });
+
+                peer.on('disconnected', () => handleDisconnection("Peer disconnected"));
+            }
+        }
+
+        function broadcastState(type, payload = {}) {
+            if (conn && conn.open) {
+                conn.send({ type: type, payload: payload });
+            }
+        }
+
+        function updateConnectionStatus(status, text) {
+            const aStatus = document.getElementById('a-connection-status');
+            const bStatus = document.getElementById('b-connection-status');
+            
+            let colorClass = 'text-yellow-400';
+            let dotClass = 'bg-yellow-500';
+            if (status === 'connected') { colorClass = 'text-emerald-400'; dotClass = 'bg-emerald-500 shadow-[0_0_10px_#10b981]'; }
+            if (status === 'error') { colorClass = 'text-red-400'; dotClass = 'bg-red-500'; }
+            
+            const html = `<span class="w-3 h-3 rounded-full ${dotClass} mr-2"></span>${text}`;
+            if (aStatus && currentRole === 'A') { aStatus.innerHTML = html; aStatus.className = `flex items-center text-sm font-bold ${colorClass}`; }
+            if (bStatus && currentRole === 'B') { bStatus.innerHTML = html; bStatus.className = `flex items-center text-sm font-bold ${colorClass}`; }
+        }
+
+        function handleDisconnection(reason = "") {
+            if (!connectionEstablished) return;
+            connectionEstablished = false;
+            stopHeartbeat();
+            
+            if (conn) { conn.close(); conn = null; }
+            if (peer) { peer.destroy(); peer = null; }
+            
+            updateConnectionStatus('error', 'Disconnected');
+            if (currentRole === 'A') {
+                document.getElementById('btn-start').disabled = true;
+                if (typeof resetTimer === 'function') resetTimer(); 
+            }
+            
+            showModal(
+                "デバイス間の同期が外れました。<br>スリープ状態になったか、通信環境が不安定です。<br><br>「再同期する」ボタンを押して、最初から接続し直してください。<br><br><span class='text-xs text-slate-400'>Reason: " + reason + "</span>",
+                "同期エラー (切断)",
+                "再同期する（リロード）",
+                () => { window.location.reload(); }
+            );
+        }
+
+        function startHeartbeat() {
+            // 初回は通信が安定するまで猶予を持たせる
+            lastHeartbeatReceived = Date.now() + 5000;
+            
+            heartbeatInterval = setInterval(() => {
+                if (!connectionEstablished || !conn || !conn.open) return;
+                
+                // Aは定期的にPingを送る
+                if (currentRole === 'A') {
+                    broadcastState('ping');
+                }
+                
+                // 最後にPing/Pongを受け取ってから8秒経過したら切断とみなす
+                if (Date.now() - lastHeartbeatReceived > 8000) {
+                    handleDisconnection("Heartbeat timeout");
+                }
+            }, 2000); // 2秒ごとに実行
+        }
+
+        function stopHeartbeat() {
+            if (heartbeatInterval) {
+                clearInterval(heartbeatInterval);
+                heartbeatInterval = null;
+            }
+        }
+
+        function setupNetworkListeners() {
+            conn.on('close', () => handleDisconnection("Connection closed by peer"));
+            conn.on('error', (err) => handleDisconnection("Connection error"));
+
+            conn.on('data', (msg) => {
+                // Heartbeat ping-pong
+                if (msg.type === 'ping') {
+                    lastHeartbeatReceived = Date.now();
+                    broadcastState('pong');
+                    return;
+                }
+                if (msg.type === 'pong') {
+                    lastHeartbeatReceived = Date.now();
+                    return;
+                }
+
+                if (currentRole === 'A') {
+                    if (msg.type === 'b_stopped') {
+                        if (state.status === 'running') {
+                            state.status = 'finished';
+                            // マスタークロック(PC)でタイムを確定
+                            state.finalTime = Date.now() - aStartTimestamp;
+                            updateDisplays();
+                            document.getElementById('btn-start').disabled = false;
+                            broadcastState('sync_state', state);
+                        }
+                    }
+                    else if (msg.type === 'b_reset') {
+                        resetTimer();
+                    }
+                } 
+                else if (currentRole === 'B') {
+                    if (msg.type === 'start_running') {
+                        state.status = 'running';
+                        bLocalStartTimestamp = Date.now() + msg.payload.futureOffset;
+                        cancelAnimationFrame(animationFrame);
+                        requestAnimationFrame(updateTimerUI);
+                    }
+                    else if (msg.type === 'sync_state') {
+                        state = msg.payload;
+                        handleStateChangeOnB();
+                    }
+                }
+            });
+        }
+
+        let audioCtx;
+        
+        function ensureAudioAwake() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            
+            // 1Hzキープアライブ: OSのオーディオサスペンド（1.7秒の壁）を完全に防ぐ
+            try {
+                const osc = audioCtx.createOscillator();
+                osc.frequency.value = 1; 
+                const gain = audioCtx.createGain();
+                gain.gain.value = 0.001; 
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+            } catch(e) {}
+            
+            if ('speechSynthesis' in window) {
+                const uttr = new SpeechSynthesisUtterance(''); 
+                uttr.volume = 0; 
+                window.speechSynthesis.speak(uttr);
+            }
+        }
+
+        function speakText(text) {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+                // 読み上げテキストから不要なカンマなどを除外し、確実に単語だけを発音させる
+                setTimeout(() => {
+                    const uttr = new SpeechSynthesisUtterance(text);
+                    uttr.lang = 'en-US'; 
+                    uttr.rate = 0.85;
+                    window.speechSynthesis.speak(uttr);
+                }, 50);
+            }
+        }
+
+        function synthesizePistolSound() {
+            if (!audioCtx) return;
+            const time = audioCtx.currentTime;
+            
+            const bufferSize = audioCtx.sampleRate * 1; 
+            const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+            const data = buffer.getChannelData(0);
+            for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+            const noise = audioCtx.createBufferSource(); noise.buffer = buffer;
+            const noiseFilter = audioCtx.createBiquadFilter();
+            noiseFilter.type = 'bandpass'; noiseFilter.frequency.setValueAtTime(3000, time);
+            noiseFilter.frequency.exponentialRampToValueAtTime(100, time + 0.2); noiseFilter.Q.setValueAtTime(1, time);
+            const noiseGain = audioCtx.createGain();
+            noiseGain.gain.setValueAtTime(0, time); noiseGain.gain.linearRampToValueAtTime(2, time + 0.001); 
+            noiseGain.gain.exponentialRampToValueAtTime(0.01, time + 0.3); 
+            noise.connect(noiseFilter); noiseFilter.connect(noiseGain); noiseGain.connect(audioCtx.destination);
+            
+            const osc = audioCtx.createOscillator(); osc.type = 'triangle';
+            osc.frequency.setValueAtTime(100, time); osc.frequency.exponentialRampToValueAtTime(40, time + 0.2);
+            const oscGain = audioCtx.createGain(); oscGain.gain.setValueAtTime(0, time);
+            oscGain.gain.linearRampToValueAtTime(1, time + 0.001); oscGain.gain.exponentialRampToValueAtTime(0.01, time + 0.2);
+            osc.connect(oscGain); oscGain.connect(audioCtx.destination);
+
+            noise.start(time); osc.start(time); noise.stop(time + 0.5); osc.stop(time + 0.5);
+        }
+
+        let alarmLoopId;
+        let alarmTargets = { mark: 0, set: 0, gun: 0 };
+        let animationFrame;
+
+        window.startSequence = function() {
+            if (state.status === 'running') return;
+            document.getElementById('btn-start').disabled = true;
+            ensureAudioAwake(); 
+
+            const now = Date.now();
+            const delayMark = parseFloat(document.getElementById('input-mark').value) * 1000;
+            const delaySet = parseFloat(document.getElementById('input-set').value) * 1000;
+
+            // アラーム時刻の設定 (ボタン押下から1秒後にMark開始)
+            alarmTargets.mark = now + 1000; 
+            alarmTargets.set = alarmTargets.mark + delayMark;
+            alarmTargets.gun = alarmTargets.set + delaySet;
+            
+            state.status = 'ready';
+            checkAlarms(); // 監視ループ開始
+        };
+
+        function checkAlarms() {
+            const now = Date.now();
+
+            if (state.status === 'ready' && now >= alarmTargets.mark) {
+                state.status = 'mark'; 
+                speakText("On your mark"); // 余計な記号を削除
+                updateDisplays(); 
+                broadcastState('sync_state', state);
+            }
+            else if (state.status === 'mark' && now >= alarmTargets.set) {
+                state.status = 'set'; 
+                speakText("Set"); // 余計な記号を削除
+                updateDisplays(); 
+                broadcastState('sync_state', state);
+            }
+            else if (state.status === 'set' && now >= alarmTargets.gun) {
+                // 号砲を鳴らす
+                synthesizePistolSound();
+                
+                state.status = 'running';
+                aStartTimestamp = now;
+                
+                // Bにスタートを通知
+                broadcastState('start_running', { futureOffset: 0 });
+                
+                updateDisplays();
+                requestAnimationFrame(updateTimerUI);
+                return; // 監視ループ終了
+            }
+            
+            if (state.status !== 'running') {
+                alarmLoopId = requestAnimationFrame(checkAlarms);
+            }
+        }
+
+        function handleStateChangeOnB() {
+            updateDisplays();
+            if (state.status === 'ready') document.getElementById('btn-reset-b').classList.add('hidden');
+        }
+
+        window.stopTimer = function(e) {
+            if (e) e.preventDefault();
+            if (currentRole !== 'B' || state.status !== 'running') return;
+            
+            broadcastState('b_stopped');
+            
+            document.getElementById('b-status-text').innerText = 'CALCULATING...';
+            document.getElementById('b-status-text').className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-blue-900/50 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight';
+            document.getElementById('btn-stop').className = 'flex-1 flex flex-col items-center justify-center bg-slate-800 relative';
+        };
+
+        window.requestReset = function() {
+            broadcastState('b_reset');
+            document.getElementById('btn-reset-b').classList.add('hidden');
+        };
+        
+        window.resetTimer = function() {
+            cancelAnimationFrame(alarmLoopId);
+            state.status = 'ready'; state.finalTime = 0; aStartTimestamp = 0;
+            updateDisplays(); broadcastState('sync_state', state);
+            document.getElementById('btn-start').disabled = false;
+        };
+
+        function formatTime(ms) {
+            if (ms < 0) ms = 0;
+            const totalSeconds = Math.floor(ms / 1000); const remainderMs = Math.floor((ms % 1000) / 10);
+            return `${totalSeconds.toString().padStart(2, '0')}.${remainderMs.toString().padStart(2, '0')}`;
+        }
+
+        function updateDisplays() {
+            const aStatus = document.getElementById('a-status-text'); const bStatus = document.getElementById('b-status-text'); const bArea = document.getElementById('btn-stop');
+            
+            if (state.status === 'ready') {
+                aStatus.innerText = 'READY'; aStatus.className = 'text-xl font-bold text-slate-400 mb-2 h-8 uppercase tracking-widest'; document.getElementById('a-timer-display').innerText = '00.00';
+                if(currentRole === 'B') { bStatus.innerText = 'WAITING'; bStatus.className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-slate-700 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight'; bArea.className = 'flex-1 flex flex-col items-center justify-center bg-slate-900 relative transition-colors duration-500'; document.getElementById('b-timer-display').innerText = '00.00'; }
+            } else if (state.status === 'mark') {
+                aStatus.innerText = 'On Your Mark'; aStatus.className = 'text-xl font-bold text-yellow-400 mb-2 h-8 uppercase tracking-widest'; if(currentRole === 'B') bStatus.innerText = 'MARK';
+            } else if (state.status === 'set') {
+                aStatus.innerText = 'Set'; aStatus.className = 'text-xl font-bold text-orange-400 mb-2 h-8 uppercase tracking-widest'; if(currentRole === 'B') bStatus.innerText = 'SET';
+            } else if (state.status === 'running') {
+                aStatus.innerText = 'RUNNING'; aStatus.className = 'text-xl font-bold text-emerald-400 mb-2 h-8 uppercase tracking-widest';
+                if(currentRole === 'B') { bStatus.innerText = 'STOP'; bStatus.className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-red-900/50 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight'; bArea.className = 'flex-1 flex flex-col items-center justify-center bg-red-600 stop-button-area relative transition-colors duration-200'; }
+            } else if (state.status === 'finished') {
+                aStatus.innerText = 'FINISHED'; aStatus.className = 'text-xl font-bold text-blue-400 mb-2 h-8 uppercase tracking-widest';
+                if(currentRole === 'B') { bStatus.innerText = 'TIME'; bStatus.className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-blue-900/50 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight'; bArea.className = 'flex-1 flex flex-col items-center justify-center bg-blue-600 relative transition-colors duration-300'; document.getElementById('btn-reset-b').classList.remove('hidden'); }
+                
+                const formatted = formatTime(state.finalTime);
+                document.getElementById('a-timer-display').innerText = formatted;
+                if(currentRole === 'B') document.getElementById('b-timer-display').innerText = formatted;
+            }
+        }
+
+        function updateTimerUI() {
+            if (state.status !== 'running') return;
+            
+            // PCとスマホで別々の時計を参照する
+            let elapsed = currentRole === 'A' ? Date.now() - aStartTimestamp : Date.now() - bLocalStartTimestamp;
+            
+            document.getElementById(currentRole === 'A' ? 'a-timer-display' : 'b-timer-display').innerText = formatTime(elapsed);
+            animationFrame = requestAnimationFrame(updateTimerUI);
+        }
+    </script>
+</body>
+</html>
