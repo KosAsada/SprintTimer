@@ -437,6 +437,7 @@
                     if (msg.type === 'start_running') {
                         state.status = 'running';
                         bLocalStartTimestamp = Date.now() + msg.payload.futureOffset;
+                        updateDisplays(); // ←この1行が抜けており、ボタンが復活していませんでした
                         cancelAnimationFrame(animationFrame);
                         requestAnimationFrame(updateTimerUI);
                     }
