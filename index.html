@@ -78,16 +78,18 @@
             <div class="w-full lg:flex-1 bg-slate-800/50 rounded-2xl border border-slate-700 flex flex-col items-center justify-center p-8 relative min-h-[350px]">
                 <div id="a-status-text" class="text-xl font-bold text-slate-400 mb-2 h-8 uppercase tracking-widest">READY</div>
                 <div id="a-timer-display" class="timer-font text-5xl sm:text-7xl md:text-9xl font-black mb-8">00.00</div>
-                <button id="btn-start" onclick="startSequence()" disabled class="w-32 h-32 sm:w-48 sm:h-48 rounded-full bg-gradient-to-b from-blue-500 to-blue-700 hover:from-blue-400 hover:to-blue-600 shadow-[0_0_40px_rgba(59,130,246,0.5)] border-4 border-blue-400 text-white font-black text-2xl sm:text-4xl flex items-center justify-center transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
-                    START
+                <button id="btn-start" onclick="startOnYourMark()" disabled class="w-32 h-32 sm:w-48 sm:h-48 rounded-full bg-gradient-to-b from-blue-500 to-blue-700 hover:from-blue-400 hover:to-blue-600 shadow-[0_0_40px_rgba(59,130,246,0.5)] border-4 border-blue-400 text-white font-black text-xl sm:text-2xl flex flex-col items-center justify-center transition-transform active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
+                    <span class="text-sm sm:text-base font-normal opacity-80">START</span>
+                    On Your Mark
                 </button>
             </div>
 
             <div class="w-full shrink-0 lg:w-80 bg-slate-800 rounded-2xl p-6 flex flex-col gap-4">
                 <h3 class="font-bold text-lg border-b border-slate-700 pb-2">Settings</h3>
-                <div>
-                    <label class="block text-sm text-slate-400 mb-2">Interval: Mark → Set (sec)</label>
-                    <input type="number" id="input-mark" value="2.0" step="0.1" min="1.0" max="10.0" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xl font-mono text-center">
+                <div class="opacity-50 pointer-events-none">
+                    <label class="block text-sm text-slate-400 mb-2 line-through">Interval: Mark → Set (sec)</label>
+                    <div class="text-xs text-slate-500 mb-2">Controlled by Device B</div>
+                    <input type="number" id="input-mark" value="2.0" step="0.1" min="1.0" max="10.0" class="w-full bg-slate-900 border border-slate-700 rounded p-2 text-xl font-mono text-center hidden">
                 </div>
                 <div>
                     <label class="block text-sm text-slate-400 mb-2">Interval: Set → Gun (sec)</label>
@@ -108,10 +110,10 @@
             </div>
         </div>
 
-        <div id="btn-stop" class="flex-1 flex flex-col items-center justify-center bg-slate-900 stop-button-area relative" onmousedown="stopTimer(event)" ontouchstart="stopTimer(event)">
-            <div id="b-status-text" class="text-[10vw] sm:text-6xl md:text-8xl font-black text-slate-800 mb-4 opacity-50 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight">STOP</div>
+        <div id="btn-action-b" class="flex-1 flex flex-col items-center justify-center bg-slate-900 relative transition-colors duration-200" onmousedown="handleBAction(event)" ontouchstart="handleBAction(event)">
+            <div id="b-status-text" class="text-[10vw] sm:text-6xl md:text-8xl font-black text-slate-700 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight">WAITING</div>
             <div id="b-timer-display" class="timer-font text-[22vw] sm:text-[15vw] md:text-[12rem] font-black text-white pointer-events-none leading-none">00.00</div>
-            <div class="absolute bottom-8 text-slate-500 text-sm pointer-events-none">Tap anywhere on screen to STOP</div>
+            <div id="b-instruction-text" class="absolute bottom-8 text-slate-500 text-sm pointer-events-none">Waiting for Device A</div>
         </div>
 
         <div id="btn-reset-b" class="absolute bottom-8 right-8 hidden z-20">
@@ -412,7 +414,12 @@
                 }
 
                 if (currentRole === 'A') {
-                    if (msg.type === 'b_stopped') {
+                    if (msg.type === 'b_trigger_set') {
+                        if (state.status === 'mark') {
+                            triggerSetSequence();
+                        }
+                    }
+                    else if (msg.type === 'b_stopped') {
                         if (state.status === 'running') {
                             state.status = 'finished';
                             // マスタークロック(PC)でタイムを確定
@@ -505,43 +512,41 @@
         }
 
         let alarmLoopId;
-        let alarmTargets = { mark: 0, set: 0, gun: 0 };
+        let alarmTargets = { gun: 0 };
         let animationFrame;
 
-        window.startSequence = function() {
-            if (state.status === 'running') return;
+        // A側の「Start(On Your Mark)」ボタン
+        window.startOnYourMark = function() {
+            if (state.status !== 'ready') return;
             document.getElementById('btn-start').disabled = true;
             ensureAudioAwake(); 
 
-            const now = Date.now();
-            const delayMark = parseFloat(document.getElementById('input-mark').value) * 1000;
-            const delaySet = parseFloat(document.getElementById('input-set').value) * 1000;
-
-            // アラーム時刻の設定 (ボタン押下から1秒後にMark開始)
-            alarmTargets.mark = now + 1000; 
-            alarmTargets.set = alarmTargets.mark + delayMark;
-            alarmTargets.gun = alarmTargets.set + delaySet;
-            
-            state.status = 'ready';
-            checkAlarms(); // 監視ループ開始
+            state.status = 'mark'; 
+            speakText("On your mark"); 
+            updateDisplays(); 
+            broadcastState('sync_state', state);
         };
 
-        function checkAlarms() {
+        // B側の「SET」ボタンからの通知を受け取って発動
+        function triggerSetSequence() {
+            if (state.status !== 'mark') return;
+            
+            state.status = 'set'; 
+            speakText("Set"); 
+            updateDisplays(); 
+            broadcastState('sync_state', state);
+
+            const now = Date.now();
+            const delaySet = parseFloat(document.getElementById('input-set').value) * 1000;
+            alarmTargets.gun = now + delaySet;
+            
+            checkGunAlarm();
+        }
+
+        function checkGunAlarm() {
             const now = Date.now();
 
-            if (state.status === 'ready' && now >= alarmTargets.mark) {
-                state.status = 'mark'; 
-                speakText("On your mark"); // 余計な記号を削除
-                updateDisplays(); 
-                broadcastState('sync_state', state);
-            }
-            else if (state.status === 'mark' && now >= alarmTargets.set) {
-                state.status = 'set'; 
-                speakText("Set"); // 余計な記号を削除
-                updateDisplays(); 
-                broadcastState('sync_state', state);
-            }
-            else if (state.status === 'set' && now >= alarmTargets.gun) {
+            if (state.status === 'set' && now >= alarmTargets.gun) {
                 // 号砲を鳴らす
                 synthesizePistolSound();
                 
@@ -556,8 +561,8 @@
                 return; // 監視ループ終了
             }
             
-            if (state.status !== 'running') {
-                alarmLoopId = requestAnimationFrame(checkAlarms);
+            if (state.status === 'set') {
+                alarmLoopId = requestAnimationFrame(checkGunAlarm);
             }
         }
 
@@ -566,15 +571,27 @@
             if (state.status === 'ready') document.getElementById('btn-reset-b').classList.add('hidden');
         }
 
-        window.stopTimer = function(e) {
+        // B側のアクション（SET開始 または STOP）
+        window.handleBAction = function(e) {
             if (e) e.preventDefault();
-            if (currentRole !== 'B' || state.status !== 'running') return;
+            if (currentRole !== 'B') return;
             
-            broadcastState('b_stopped');
-            
-            document.getElementById('b-status-text').innerText = 'CALCULATING...';
-            document.getElementById('b-status-text').className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-blue-900/50 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight';
-            document.getElementById('btn-stop').className = 'flex-1 flex flex-col items-center justify-center bg-slate-800 relative';
+            if (state.status === 'mark') {
+                // BからAにSETをトリガーするよう通知
+                broadcastState('b_trigger_set');
+                // 画面を一時的に遷移状態にする
+                const bArea = document.getElementById('btn-action-b');
+                bArea.className = 'flex-1 flex flex-col items-center justify-center bg-orange-700 relative transition-colors duration-200 pointer-events-none';
+                document.getElementById('b-status-text').innerText = 'SENDING...';
+            } 
+            else if (state.status === 'running') {
+                // タイムストップ
+                broadcastState('b_stopped');
+                
+                document.getElementById('b-status-text').innerText = 'CALCULATING...';
+                document.getElementById('b-status-text').className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-blue-900/50 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight';
+                document.getElementById('btn-action-b').className = 'flex-1 flex flex-col items-center justify-center bg-slate-800 relative';
+            }
         };
 
         window.requestReset = function() {
@@ -596,21 +613,52 @@
         }
 
         function updateDisplays() {
-            const aStatus = document.getElementById('a-status-text'); const bStatus = document.getElementById('b-status-text'); const bArea = document.getElementById('btn-stop');
+            const aStatus = document.getElementById('a-status-text'); 
+            const bStatus = document.getElementById('b-status-text'); 
+            const bArea = document.getElementById('btn-action-b');
+            const bInstruction = document.getElementById('b-instruction-text');
             
             if (state.status === 'ready') {
                 aStatus.innerText = 'READY'; aStatus.className = 'text-xl font-bold text-slate-400 mb-2 h-8 uppercase tracking-widest'; document.getElementById('a-timer-display').innerText = '00.00';
-                if(currentRole === 'B') { bStatus.innerText = 'WAITING'; bStatus.className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-slate-700 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight'; bArea.className = 'flex-1 flex flex-col items-center justify-center bg-slate-900 relative transition-colors duration-500'; document.getElementById('b-timer-display').innerText = '00.00'; }
+                if(currentRole === 'B') { 
+                    bStatus.innerText = 'WAITING'; bStatus.className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-slate-700 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight'; 
+                    bArea.className = 'flex-1 flex flex-col items-center justify-center bg-slate-900 relative transition-colors duration-500 pointer-events-none'; 
+                    document.getElementById('b-timer-display').innerText = '00.00';
+                    bInstruction.innerText = 'Waiting for Device A';
+                }
             } else if (state.status === 'mark') {
-                aStatus.innerText = 'On Your Mark'; aStatus.className = 'text-xl font-bold text-yellow-400 mb-2 h-8 uppercase tracking-widest'; if(currentRole === 'B') bStatus.innerText = 'MARK';
+                aStatus.innerText = 'On Your Mark'; aStatus.className = 'text-xl font-bold text-yellow-400 mb-2 h-8 uppercase tracking-widest'; 
+                if(currentRole === 'B') {
+                    bStatus.innerText = 'TAP TO SET'; 
+                    bStatus.className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-orange-900/50 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight';
+                    bArea.className = 'flex-1 flex flex-col items-center justify-center bg-orange-600 stop-button-area relative transition-colors duration-200 pointer-events-auto cursor-pointer';
+                    bInstruction.innerText = 'Tap anywhere to start SET sequence';
+                }
             } else if (state.status === 'set') {
-                aStatus.innerText = 'Set'; aStatus.className = 'text-xl font-bold text-orange-400 mb-2 h-8 uppercase tracking-widest'; if(currentRole === 'B') bStatus.innerText = 'SET';
+                aStatus.innerText = 'Set'; aStatus.className = 'text-xl font-bold text-orange-400 mb-2 h-8 uppercase tracking-widest'; 
+                if(currentRole === 'B') {
+                    bStatus.innerText = 'SET'; 
+                    bStatus.className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-orange-900/50 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight';
+                    bArea.className = 'flex-1 flex flex-col items-center justify-center bg-orange-700 relative transition-colors duration-200 pointer-events-none';
+                    bInstruction.innerText = 'Waiting for Gun...';
+                }
             } else if (state.status === 'running') {
                 aStatus.innerText = 'RUNNING'; aStatus.className = 'text-xl font-bold text-emerald-400 mb-2 h-8 uppercase tracking-widest';
-                if(currentRole === 'B') { bStatus.innerText = 'STOP'; bStatus.className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-red-900/50 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight'; bArea.className = 'flex-1 flex flex-col items-center justify-center bg-red-600 stop-button-area relative transition-colors duration-200'; }
+                if(currentRole === 'B') { 
+                    bStatus.innerText = 'STOP'; 
+                    bStatus.className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-red-900/50 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight'; 
+                    bArea.className = 'flex-1 flex flex-col items-center justify-center bg-red-600 stop-button-area relative transition-colors duration-200 pointer-events-auto cursor-pointer'; 
+                    bInstruction.innerText = 'Tap anywhere to STOP';
+                }
             } else if (state.status === 'finished') {
                 aStatus.innerText = 'FINISHED'; aStatus.className = 'text-xl font-bold text-blue-400 mb-2 h-8 uppercase tracking-widest';
-                if(currentRole === 'B') { bStatus.innerText = 'TIME'; bStatus.className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-blue-900/50 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight'; bArea.className = 'flex-1 flex flex-col items-center justify-center bg-blue-600 relative transition-colors duration-300'; document.getElementById('btn-reset-b').classList.remove('hidden'); }
+                if(currentRole === 'B') { 
+                    bStatus.innerText = 'TIME'; 
+                    bStatus.className = 'text-[10vw] sm:text-6xl md:text-8xl font-black text-blue-900/50 mb-4 uppercase tracking-tighter text-center px-4 w-full break-words leading-tight'; 
+                    bArea.className = 'flex-1 flex flex-col items-center justify-center bg-blue-600 relative transition-colors duration-300 pointer-events-none'; 
+                    document.getElementById('btn-reset-b').classList.remove('hidden'); 
+                    bInstruction.innerText = 'Result recorded';
+                }
                 
                 const formatted = formatTime(state.finalTime);
                 document.getElementById('a-timer-display').innerText = formatted;
